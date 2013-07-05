@@ -23,6 +23,8 @@ sub detect{
 
 	my $buf = "";
 	my $content = "";
+	my $surrounding_content = [];
+	my $surrounding_content_token_idx = [];
 
 	while ($idx_cur <= $str_len) {
 		$char_cur = substr($str, $idx_cur, 1);
@@ -34,9 +36,11 @@ sub detect{
 		#print "\n\n";
 
 		if ($char_cur =~ /[\r\n]/) {
-			$idx_cur += 1;
-			next;
-		}
+            $idx_cur += 1;
+            next;
+        }
+
+		push(@$surrounding_content, $char_cur);
 
 		if ($char_prev.$char_cur eq $self_close) {
 			$idx_cur += 1;
@@ -47,6 +51,8 @@ sub detect{
 
 			next;
 		} elsif ($char_prev.$char_cur eq $close_open) {
+			push (@$surrounding_content_token_idx, $idx_cur - 1) if !$ignore_next;
+
 			$idx_cur += 1;
 			$is_open = undef;
 			$is_close_open = 1;
@@ -54,13 +60,45 @@ sub detect{
 
 			next;
 		} elsif ($char_cur eq $open) {
+			push (@$surrounding_content_token_idx, $idx_cur) if !$ignore_next;
+
 			$idx_cur += 1;
 			$is_open = 1;
 			$is_close_open = undef;
 			$ignore_next = undef;
 
 			next;
-		} elsif ($is_open && ($char_cur eq $close || $char_cur =~ /\s+/)) {
+		} elsif ($is_open && ($char_cur eq $close || $char_cur =~ /[ ]+/)) {
+			push (@$surrounding_content_token_idx, $idx_cur) if !$ignore_next;
+
+			my $len = scalar @$recognized_post;
+			if ($len > 0 && $buf eq $recognized_post->[$len-1]) {
+				my $pattern = join (",", @$recognized_post);
+				
+				#print join(",", @$surrounding_content_token_idx)."\n";
+
+				my $start_idx = $surrounding_content_token_idx->[$len - 1] + 1;
+				my $end_idx = $surrounding_content_token_idx->[-3] - 1;
+
+				#print "start_idx $start_idx end_idx $end_idx\n";
+				#print join("", @$surrounding_content[$start_idx..$end_idx])."\n";
+
+				delete $recognized_cnt->{$pattern} if (exists $recognized_cnt->{$pattern});
+				push (@{$recognized_cnt->{$pattern}}, join("", @$surrounding_content[$start_idx..$end_idx]));
+
+				#print "post_tag begin ".($surrounding_content_token_idx->[-2])."\n";
+
+				my $post_tag = substr(join("", @$surrounding_content), $surrounding_content_token_idx->[-3]);
+
+				$content = "";
+				$surrounding_content = [];
+				$surrounding_content_token_idx = [];
+			    $recognized_post = [];
+				$recognized_pre = [];
+
+				push (@$surrounding_content, $post_tag);
+			} 
+
 			push (@$recognized_pre, $buf) if !$ignore_next;
 
 			$buf = "";
@@ -73,19 +111,24 @@ sub detect{
 
 			next;
 		} elsif ($is_close_open && $char_cur eq $close) {
+			push (@$surrounding_content_token_idx, $idx_cur) if !$ignore_next;
+
 			my $pair = pop (@$recognized_pre);
 
 			#print "close match pair $pair buf $buf\n";
 
-			push (@$recognized_post, $buf) if $pair eq $buf;
-
-			if (scalar @$recognized_pre == 0) {
+			if ($pair eq $buf) {
+				push (@$recognized_post, $buf);
 				my $pattern = join (",", @$recognized_post);
-				push (@{$recognized_cnt->{$pattern}}, $content);
-
-				$content = "";
-				$recognized_post = [];
+				push (@{$recognized_cnt->{$pattern}}, join("", @$surrounding_content));
 			}
+
+			if ($pair ne $buf || scalar @$recognized_pre == 0) {
+				$content = "";
+				$surrounding_content = [];
+				$surrounding_content_token_idx = [];
+				$recognized_post = [];
+			} 
 
 			$buf = "";
 			$idx_cur += 1;
@@ -109,9 +152,21 @@ sub detect{
 		}
 	}
 
+	my $max_len = 0;
+	foreach (keys %$recognized_cnt) {
+		$max_len = length ($_) if length ($_) > $max_len;
+	}
+
 	my @ret;
 	foreach (keys %$recognized_cnt) {
-		my $recognized = $recognized_cnt->{$_};
+		next if length ($_) != $max_len;
+
+		my $pattern = $_;
+		my $recognized = $recognized_cnt->{$pattern};
+
+		foreach (@$recognized) {
+				#print $pattern." ".$_."\n";
+		}
 
 		if (scalar @$recognized > 1) {
 			foreach (@$recognized) {
